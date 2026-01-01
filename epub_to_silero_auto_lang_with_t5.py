@@ -105,6 +105,86 @@ def safe_t5_normalize(text: str, max_input_len: int = 300) -> str:
     return result
 
 
+# ---------- Акцентор для расстановки ударений ----------
+
+_ACCENTOR_MODEL = None
+_ACCENTOR_DEVICE = None
+
+def init_accentor():
+    """Инициализировать модель акцентора для русского языка."""
+    global _ACCENTOR_MODEL, _ACCENTOR_DEVICE
+    if _ACCENTOR_MODEL is not None:
+        return
+    
+    print("Загружаю акцентор для расстановки ударений...")
+    try:
+        # Используем модель акцентора от Silero
+        _ACCENTOR_MODEL, _ = torch.hub.load(
+            'snakers4/silero-models', 
+            'silero_te',
+            language='RU',
+            speaker='ru_v3'
+        )
+        _ACCENTOR_DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        _ACCENTOR_MODEL.to(_ACCENTOR_DEVICE)
+        print(f"Акцентор загружен на {_ACCENTOR_DEVICE}")
+    except Exception as e:
+        print(f"Не удалось загрузить акцентор: {e}")
+        _ACCENTOR_MODEL = None
+
+def add_stress_marks(text: str) -> str:
+    """
+    Добавить ударения в русский текст с помощью акцентора Silero.
+    Если акцентор недоступен, возвращает текст без изменений.
+    """
+    # Если в тексте уже есть ударения (символ +), не обрабатываем
+    if '+' in text:
+        return text
+    
+    init_accentor()
+    
+    if _ACCENTOR_MODEL is None:
+        return text
+    
+    try:
+        # Разбиваем на предложения для лучшей точности
+        sentences = re.split(r'([.!?]+\s+)', text)
+        stressed_sentences = []
+        
+        for i in range(0, len(sentences), 2):
+            sentence = sentences[i].strip()
+            if sentence:
+                # Получаем ударения от модели
+                with torch.no_grad():
+                    stressed = _ACCENTOR_MODEL.put_accent(sentence)
+                stressed_sentences.append(stressed)
+            else:
+                stressed_sentences.append(sentence)
+            
+            # Добавляем разделитель, если он есть
+            if i + 1 < len(sentences):
+                stressed_sentences.append(sentences[i + 1])
+        
+        return "".join(stressed_sentences)
+    except Exception as e:
+        print(f"Ошибка при расстановке ударений: {e}")
+        return text
+
+def manual_stress_to_silero(text: str) -> str:
+    """
+    Преобразовать ручную расстановку ударений (к+ошка) в формат Silero.
+    Silero понимает ударение как буква ё или + после гласной.
+    """
+    # Заменяем + после гласной на ё (для русских слов)
+    def replace_plus(match):
+        word = match.group(0)
+        # Находим гласную перед +
+        stressed_word = re.sub(r'([аеёиоуыэюяАЕЁИОУЫЭЮЯ])\+', r'\1ё', word)
+        return stressed_word
+    
+    return re.sub(r'\b\w*[аеёиоуыэюяАЕЁИОУЫЭЮЯ]\+\w*\b', replace_plus, text)
+
+
 # ---------- нормализация текста перед TTS ----------
 
 def normalize_spaces(text: str) -> str:
@@ -435,7 +515,7 @@ def clean_for_silero(text: str) -> str:
         "абвгдеёжзийклмнопрстуфхцчшщъыьэюя"
         "abcdefghijklmnopqrstuvwxyz"
         "0123456789"
-        " .,!?:;\"'()-%\n"
+        " .,!?:;\"'()-%+\n"
     )
 
     res_chars = []
@@ -459,6 +539,11 @@ def preprocess_text_for_tts(text: str, lang_code: str = "ru") -> str:
             text = safe_t5_normalize(text, max_input_len=300)
         except Exception as e:
             print(f"  Ошибка T5-нормализации: {e}. Продолжаю без неё.")
+        
+        # Добавляем расстановку ударений
+        text = add_stress_marks(text)
+        # Конвертируем ручные ударения в формат Silero
+        text = manual_stress_to_silero(text)
     
     text = normalize_spaces(text)
     text = normalize_lists_and_glossary(text)
