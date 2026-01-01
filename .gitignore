@@ -1,0 +1,15 @@
+# Exclude all directories
+in/
+out/
+temp/
+ready/
+venv_silero/
+audio_book/
+epub2audio-FINAL/
+old scripts/
+
+# Exclude workspace file
+*.code-workspace
+
+# Keep only the main Python file
+!epub_to_silero_auto_lang_with_t5.py
